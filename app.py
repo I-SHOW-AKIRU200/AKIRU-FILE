@@ -16,7 +16,7 @@ MONGO_URI = os.getenv("MONGO_URI")
 
 # Hardcoded Configuration
 PASSWORD = "TEAM-AKIRU"
-SECRET_KEY = "default-secret-key-please-change"  # Change this in production
+API_URL = "https://storage-api.team-akiru.site"
 REQUIRED_HEADERS = {
     "Name": "TEAM-AKIRU-STORAGE",
     "Connection": "keep-alive",
@@ -67,7 +67,7 @@ def create_key():
         "ip_address": request.remote_addr
     })
     
-    return jsonify({"key": key})
+    return jsonify({"key": key}), 200, REQUIRED_HEADERS
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -105,8 +105,9 @@ def upload_file():
         return jsonify({
             "status": "uploaded",
             "file_key": file_key,
-            "file_id": message.document.file_id
-        })
+            "file_id": message.document.file_id,
+            "url": f"{API_URL}/get"
+        }), 200, REQUIRED_HEADERS
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -127,7 +128,7 @@ def get_file():
     if not file_data:
         return jsonify({"error": "File not found"}), 404
     
-    return jsonify(file_data)
+    return jsonify(file_data), 200, REQUIRED_HEADERS
 
 @app.route('/check', methods=['POST'])
 def check_keys():
@@ -142,7 +143,7 @@ def check_keys():
         {"_id": 0, "key": 1, "created_at": 1, "ip_address": 1}
     ))
     
-    return jsonify({"keys": active_keys})
+    return jsonify({"keys": active_keys}), 200, REQUIRED_HEADERS
 
 @app.route('/delete', methods=['POST'])
 def delete_key():
@@ -160,7 +161,7 @@ def delete_key():
     keys_collection.update_one({"key": user_key}, {"$set": {"active": False}})
     files_collection.update_many({"user_key": user_key}, {"$set": {"active": False}})
     
-    return jsonify({"status": "deleted"})
+    return jsonify({"status": "deleted"}), 200, REQUIRED_HEADERS
 
 @app.route('/delete-file', methods=['POST'])
 def delete_file():
@@ -181,7 +182,7 @@ def delete_file():
     if result.modified_count == 0:
         return jsonify({"error": "File not found"}), 404
     
-    return jsonify({"status": "deleted"})
+    return jsonify({"status": "deleted"}), 200, REQUIRED_HEADERS
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
