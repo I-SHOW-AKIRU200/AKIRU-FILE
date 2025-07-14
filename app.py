@@ -33,15 +33,14 @@ app.config.from_object(Config)
 # Initialize Telegram Bot
 bot = Bot(token=app.config['BOT_TOKEN'])
 
-# MongoDB Setup with error handling
+# MongoDB Setup with proper connection settings
 try:
     client = MongoClient(
         app.config['MONGO_URI'],
-        connectTimeoutMS=30000,
-        socketTimeoutMS=None,
-        socketKeepAlive=True,
-        connect=False,
-        maxPoolSize=1
+        connectTimeoutMS=5000,
+        serverSelectionTimeoutMS=5000,
+        retryWrites=True,
+        w="majority"
     )
     client.admin.command('ping')  # Test connection
     db = client["team_akiru_storage"]
