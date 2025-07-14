@@ -6,41 +6,34 @@ from flask import Flask, request, jsonify
 from pymongo import MongoClient
 from telegram import Bot
 from telegram.constants import ParseMode
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
 
 app = Flask(__name__)
 
-# Configuration
-class Config:
-    BOT_TOKEN = os.getenv("BOT_TOKEN")
-    GROUP_ID = int(os.getenv("GROUP_ID"))
-    MONGO_URI = os.getenv("MONGO_URI")
-    ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
-    SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_hex(32))
-    REQUIRED_HEADERS = {
-        "Name": "TEAM-AKIRU-STORAGE",
-        "Connection": "keep-alive",
-        "Models": "ATLDE5S1.0",
-        "Version": "1.0",
-        "Host": "storage-api.team-akiru.site"
-    }
+# Required Environment Variables
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = int(os.getenv("GROUP_ID"))
+MONGO_URI = os.getenv("MONGO_URI")
 
-app.config.from_object(Config)
+# Hardcoded Configuration
+PASSWORD = "TEAM-AKIRU"
+SECRET_KEY = "default-secret-key-please-change"  # Change this in production
+REQUIRED_HEADERS = {
+    "Name": "TEAM-AKIRU-STORAGE",
+    "Connection": "keep-alive",
+    "Models": "ATLDE5S1.0",
+    "Version": "1.0",
+    "Host": "storage-api.team-akiru.site"
+}
 
 # Initialize Telegram Bot
-bot = Bot(token=app.config['BOT_TOKEN'])
+bot = Bot(token=BOT_TOKEN)
 
-# MongoDB Setup with proper connection settings
+# MongoDB Setup
 try:
     client = MongoClient(
-        app.config['MONGO_URI'],
+        MONGO_URI,
         connectTimeoutMS=5000,
-        serverSelectionTimeoutMS=5000,
-        retryWrites=True,
-        w="majority"
+        serverSelectionTimeoutMS=5000
     )
     client.admin.command('ping')  # Test connection
     db = client["team_akiru_storage"]
@@ -50,31 +43,31 @@ except Exception as e:
     raise RuntimeError(f"Failed to connect to MongoDB: {str(e)}")
 
 def validate_headers():
-    for header, value in app.config['REQUIRED_HEADERS'].items():
+    for header, value in REQUIRED_HEADERS.items():
         if request.headers.get(header) != value:
             return False
     return True
 
-def generate_secure_key(length=10):
-    alphabet = string.ascii_letters + string.digits
-    return ''.join(secrets.choice(alphabet) for _ in range(length))
+def generate_key(length=10):
+    chars = string.ascii_letters + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(length))
 
 @app.route('/key', methods=['POST'])
 def create_key():
     if not validate_headers():
         return jsonify({"error": "Invalid headers"}), 403
     
-    try:
-        key = generate_secure_key()
-        keys_collection.insert_one({
-            "key": key,
-            "created_at": datetime.utcnow(),
-            "active": True,
-            "ip_address": request.remote_addr
-        })
-        return jsonify({"key": key})
-    except Exception as e:
-        return jsonify({"error": "Key generation failed"}), 500
+    key = generate_key()
+    creation_time = datetime.utcnow()
+    
+    keys_collection.insert_one({
+        "key": key,
+        "created_at": creation_time,
+        "active": True,
+        "ip_address": request.remote_addr
+    })
+    
+    return jsonify({"key": key})
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -90,10 +83,11 @@ def upload_file():
     if not keys_collection.find_one({"key": user_key, "active": True}):
         return jsonify({"error": "Invalid key"}), 403
     
+    file_key = generate_key(8)
+    
     try:
-        file_key = generate_secure_key(8)
         message = bot.send_document(
-            chat_id=app.config['GROUP_ID'],
+            chat_id=GROUP_ID,
             document=file,
             parse_mode=ParseMode.HTML
         )
@@ -121,10 +115,10 @@ def get_file():
     if not validate_headers():
         return jsonify({"error": "Invalid headers"}), 403
     
-    file_key = request.form.get('key')
-    if not file_key:
+    if 'key' not in request.form:
         return jsonify({"error": "Missing key"}), 400
     
+    file_key = request.form['key']
     file_data = files_collection.find_one(
         {"file_key": file_key, "active": True},
         {"_id": 0, "telegram_file_id": 1}
@@ -140,7 +134,7 @@ def check_keys():
     if not validate_headers():
         return jsonify({"error": "Invalid headers"}), 403
     
-    if request.form.get('Password') != app.config['ADMIN_PASSWORD']:
+    if request.form.get('Password') != PASSWORD:
         return jsonify({"error": "Invalid password"}), 403
     
     active_keys = list(keys_collection.find(
@@ -155,19 +149,16 @@ def delete_key():
     if not validate_headers():
         return jsonify({"error": "Invalid headers"}), 403
     
-    if not all(field in request.form for field in ['key', 'password']):
-        return jsonify({"error": "Missing required fields"}), 400
+    if 'key' not in request.form or 'password' not in request.form:
+        return jsonify({"error": "Missing key or password"}), 400
     
-    if request.form['password'] != app.config['ADMIN_PASSWORD']:
+    if request.form['password'] != PASSWORD:
         return jsonify({"error": "Invalid password"}), 403
     
-    result = keys_collection.update_one(
-        {"key": request.form['key']},
-        {"$set": {"active": False}}
-    )
+    user_key = request.form['key']
     
-    if result.modified_count == 0:
-        return jsonify({"error": "Key not found"}), 404
+    keys_collection.update_one({"key": user_key}, {"$set": {"active": False}})
+    files_collection.update_many({"user_key": user_key}, {"$set": {"active": False}})
     
     return jsonify({"status": "deleted"})
 
@@ -176,18 +167,14 @@ def delete_file():
     if not validate_headers():
         return jsonify({"error": "Invalid headers"}), 403
     
-    required_fields = ['key', 'file_key', 'password']
-    if not all(field in request.form for field in required_fields):
+    if not all(field in request.form for field in ['key', 'file_key', 'password']):
         return jsonify({"error": "Missing required fields"}), 400
     
-    if request.form['password'] != app.config['ADMIN_PASSWORD']:
+    if request.form['password'] != PASSWORD:
         return jsonify({"error": "Invalid password"}), 403
     
     result = files_collection.update_one(
-        {
-            "user_key": request.form['key'],
-            "file_key": request.form['file_key']
-        },
+        {"user_key": request.form['key'], "file_key": request.form['file_key']},
         {"$set": {"active": False}}
     )
     
@@ -197,8 +184,4 @@ def delete_file():
     return jsonify({"status": "deleted"})
 
 if __name__ == '__main__':
-    app.run(
-        host='0.0.0.0',
-        port=int(os.getenv("PORT", 5000)),
-        debug=os.getenv("FLASK_DEBUG", "false").lower() == "true"
-    )
+    app.run(host='0.0.0.0', port=5000)
